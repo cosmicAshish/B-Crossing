@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bharwara PRO - Emerald Signal</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 3D effect ONLY for the Check Status button */
+        .pressable-btn {
+            box-shadow: 0 4px 0 #1e40af;
+            transform: translateY(-2px);
+            transition: all 0.1s;
+        }
+        .pressable-btn:active {
+            box-shadow: 0 0px 0 #1e40af;
+            transform: translateY(2px);
+        }
+        .custom-scroll::-webkit-scrollbar { width: 4px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 p-4 font-sans flex justify-center min-h-screen">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const API_KEY = "rr_pf1kalhfdpnrdt40oxa3p8wniipqvudo"; 
+        const API_BASE = "https://api.railradar.org/api/v1";
+        const PROXY = "https://corsproxy.io/?"; 
+
+        const STATIONS = [
+            { code: 'UTR', dist: '8.0km', full: 'Utraitia Jn', critical: false },
+            { code: 'GTNR', dist: '5.5km', full: 'Gomti Nagar', critical: false },
+            { code: 'LBH', dist: '2.1km', full: 'Dilkusha Cabin', critical: true },
+            { code: 'BC', dist: '0km', full: 'Bharwara Crossing', critical: true },
+            { code: 'ML', dist: '1.5km', full: 'Malhaur Stn', critical: true },
+            { code: 'JRR', dist: '7.0km', full: 'Jugaur Stn', critical: false }
+        ];
+
+        const format12hr = (timeStr) => {
+            if (!timeStr || timeStr === "Unknown") return "--:--";
+            let [hrs, mins] = timeStr.split(':');
+            let period = parseInt(hrs) >= 12 ? 'PM' : 'AM';
+            hrs = parseInt(hrs) % 12 || 12;
+            return `${hrs}:${mins} ${period}`;
+        };
+
+        const App = () => {
+            const [trainList, setTrainList] = useState([]);
+            const [activeNodes, setActiveNodes] = useState({});
+            const [isMalgadi, setIsMalgadi] = useState(false);
+            const [usage, setUsage] = useState(0);
+            const [quotaSaver, setQuotaSaver] = useState(true);
+            const [loading, setLoading] = useState(false);
+            const [history, setHistory] = useState([]);
+
+            useEffect(() => {
+                const savedUsage = localStorage.getItem('railradar_usage') || 0;
+                setUsage(parseInt(savedUsage));
+            }, []);
+
+            const checkGate = async () => {
+                if (API_KEY.includes("PASTE")) return;
+                setLoading(true);
+                let allTrains = [];
+                let nodes = {};
+                let requests = 0;
+
+                const scanList = quotaSaver ? STATIONS.filter(s => s.critical && s.code !== 'BC') : STATIONS.filter(s => s.code !== 'BC');
+
+                for (let st of scanList) {
+                    try {
+                        const targetUrl = `${API_BASE}/stations/${st.code}/live?hours=1&apiKey=${API_KEY}`;
+                        const res = await fetch(PROXY + encodeURIComponent(targetUrl));
+                        const data = await res.json();
+                        requests++;
+                        
+                        const incoming = data.trains?.filter(t => !t.status?.hasDeparted) || [];
+                        if (incoming.length > 0) {
+                            nodes[st.code] = true;
+                            incoming.forEach(t => {
+                                allTrains.push({
+                                    name: t.train.name,
+                                    eta: format12hr(t.live?.expectedArrival),
+                                    delay: t.live?.arrivalDelayDisplay,
+                                    at: st.code,
+                                    isCritical: st.critical
+                                });
+                            });
+                        }
+                    } catch (e) { console.error(e); }
+                }
+
+                setUsage(prev => {
+                    const next = prev + requests;
+                    localStorage.setItem('railradar_usage', next);
+                    return next;
+                });
+
+                const sortedTrains = allTrains.sort((a, b) => (a.isCritical === b.isCritical ? 0 : a.isCritical ? -1 : 1));
+                setTrainList(sortedTrains);
+                setActiveNodes(nodes);
+                setLoading(false);
+
+                const closureTrain = sortedTrains.find(t => t.isCritical);
+                if (closureTrain || isMalgadi) {
+                    const entry = {
+                        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        name: isMalgadi ? "Goods Train (Manual)" : closureTrain.name
+                    };
+                    setHistory(prev => [entry, ...prev].slice(0, 5));
+                }
+            };
+
+            const isRed = activeNodes['ML'] || activeNodes['LBH'] || isMalgadi;
+
+            return (
+                <div className="w-full max-w-md bg-slate-900 p-6 rounded-[2.5rem] shadow-2xl border border-slate-800 self-start mt-4">
+                    <div className="flex justify-between items-start mb-10">
+                        <div>
+                            <h1 className="text-xl font-black italic uppercase tracking-tighter">Bharwara PRO</h1>
+                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Live Sync</p>
+                        </div>
+                        <div onClick={() => {const v = prompt("Set Usage:", usage); if(v) {setUsage(parseInt(v)); localStorage.setItem('railradar_usage', v)}}} className="text-right cursor-pointer bg-slate-950 p-2 rounded-xl border border-slate-800">
+                            <p className="text-[9px] font-bold text-slate-400 uppercase leading-none">Usage: {usage}/1000</p>
+                            <div className="w-16 h-1 bg-slate-800 rounded-full mt-2 overflow-hidden">
+                                <div className="h-full bg-blue-500" style={{width: `${Math.min((usage/1000)*100, 100)}%`}}></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Track Visualization */}
+                    
+                    <div className="relative flex justify-between items-center mb-24 px-1 h-12">
+                        <div className="absolute h-[1px] w-full bg-slate-800 top-[24px] left-0"></div>
+                        {STATIONS.map(st => (
+                            <div key={st.code} className="relative z-10 flex flex-col items-center flex-1 text-center">
+                                <span className="text-[8px] font-bold text-slate-600 absolute -top-5 tracking-tighter">{st.dist}</span>
+                                <div className={`w-9 h-9 rounded-full border-2 flex items-center justify-center text-[9px] font-bold transition-all duration-500 ${
+                                    st.code === 'BC' ? (isRed ? 'bg-red-600 border-white shadow-lg animate-bounce' : 'bg-white text-black') :
+                                    activeNodes[st.code] ? 'bg-red-600 border-red-400 text-white animate-pulse' : 'bg-slate-950 border-slate-800 text-slate-600'
+                                } ${quotaSaver && !st.critical ? 'opacity-20' : 'opacity-100'}`}>
+                                    {st.code === 'BC' ? '🚧' : st.code}
+                                </div>
+                                <span className="absolute top-11 text-[7px] font-bold text-slate-500 uppercase leading-tight">
+                                    {st.full.split(' ').map((word, i) => <div key={i}>{word}</div>)}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* UPDATED: FLAT EMERALD SIGNAL DISPLAY */}
+                    <div className={`p-8 rounded-3xl text-center mb-10 transition-all ${isRed ? 'bg-red-600' : 'bg-emerald-600'}`}>
+                        <h2 className="text-6xl font-black uppercase italic leading-none tracking-tighter text-white">
+                            {isRed ? 'STOP' : 'GO'}
+                        </h2>
+                    </div>
+
+                    {/* 3D TACTILE BUTTON */}
+                    <button 
+                        onClick={checkGate} 
+                        disabled={loading} 
+                        className="pressable-btn w-full py-5 rounded-2xl bg-blue-600 text-white font-black text-sm uppercase tracking-widest mb-10 flex items-center justify-center gap-3 active:scale-95 disabled:opacity-50"
+                    >
+                        {loading ? 'SYNCING...' : <span>🚂 Check Status</span>}
+                    </button>
+
+                    {/* Train Info Board */}
+                    <div className="space-y-2 mb-6 max-h-48 overflow-y-auto pr-1 custom-scroll">
+                        <h3 className="text-[10px] font-bold text-slate-500 uppercase px-2 mb-2 tracking-widest">Live Updates</h3>
+                        {trainList.length > 0 ? trainList.map((t, i) => (
+                            <div key={i} className={`p-3 rounded-2xl flex justify-between items-center border ${t.isCritical ? 'bg-red-500/10 border-red-500/30 shadow-inner shadow-red-500/10' : 'bg-slate-950 border-slate-800'}`}>
+                                <div className="max-w-[65%]">
+                                    <p className="text-xs font-bold text-white truncate">{t.name}</p>
+                                    <p className="text-[8px] text-slate-500 font-bold uppercase tracking-wider">At {t.at}</p>
+                                </div>
+                                <div className="text-right flex-shrink-0">
+                                    <p className="text-xs font-mono font-bold text-blue-400">{t.eta}</p>
+                                    <p className="text-[8px] text-red-500 font-bold italic uppercase">{t.delay}</p>
+                                </div>
+                            </div>
+                        )) : <div className="text-center py-6 border border-dashed border-slate-800 rounded-2xl text-[10px] text-slate-600 uppercase font-bold">No Traffic Found</div>}
+                    </div>
+
+                    {/* Footer Controls */}
+                    <div className="flex gap-2">
+                        <button onClick={() => setIsMalgadi(!isMalgadi)} className={`flex-1 py-4 rounded-xl font-bold text-[9px] uppercase border-2 transition-all ${isMalgadi ? 'bg-purple-600 border-purple-400 text-white shadow-lg' : 'bg-slate-900 border-slate-800 text-slate-500'}`}>
+                            {isMalgadi ? '📦 MALGADI LOGGED' : '📦 LOG MALGADI'}
+                        </button>
+                        <button onClick={() => setQuotaSaver(!quotaSaver)} className={`px-4 py-4 rounded-xl font-bold text-[9px] uppercase border-2 transition-all ${quotaSaver ? 'bg-blue-600/10 border-blue-500 text-blue-400' : 'bg-slate-900 border-slate-800 text-slate-500'}`}>
+                            {quotaSaver ? 'SAVER ON' : 'SAVER OFF'}
+                        </button>
+                    </div>
+
+                    {/* Closure History */}
+                    {history.length > 0 && (
+                        <div className="mt-6 bg-slate-950/50 rounded-2xl p-4 border border-slate-800">
+                            <h3 className="text-[9px] font-bold text-slate-600 uppercase mb-3 text-center tracking-widest border-b border-slate-800 pb-2">Recent Session Log</h3>
+                            {history.map((h, i) => (
+                                <div key={i} className="flex justify-between text-[10px] py-1.5 border-b border-slate-900 last:border-0 text-slate-500 font-mono italic">
+                                    <span className="truncate mr-4">{h.name}</span>
+                                    <span>{h.time}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
